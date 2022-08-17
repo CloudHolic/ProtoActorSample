@@ -1,6 +1,6 @@
 ﻿using Proto;
 
-record Timeout(int Time);
+public record Timeout(int Time);
 
 public class ReenterActor : IActor
 {

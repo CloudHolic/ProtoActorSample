@@ -1,6 +1,6 @@
 ﻿using Proto;
 
-record Hello(string Msg);
+public record Hello(string Msg);
 
 public class HelloActor : IActor
 {
