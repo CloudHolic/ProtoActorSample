@@ -1,4 +1,6 @@
-﻿public interface IBulbAction
+﻿namespace Behaviors;
+
+public interface IBulbAction
 {
 
 }

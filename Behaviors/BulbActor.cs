@@ -1,5 +1,7 @@
 ﻿using Proto;
 
+namespace Behaviors;
+
 public class BulbActor : IActor
 {
     private readonly Behavior _behavior;

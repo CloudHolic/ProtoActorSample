@@ -1,6 +1,7 @@
 ﻿using Proto;
 using Proto.DependencyInjection;
 using Proto.Mailbox;
+using TestProps;
 
 var system = new ActorSystem();
 

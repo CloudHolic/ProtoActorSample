@@ -1,5 +1,7 @@
 ﻿using Proto;
 
+namespace SimpleActor;
+
 public record Hello(string Msg);
 
 public class HelloActor : IActor

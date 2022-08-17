@@ -1,5 +1,7 @@
 ﻿using Proto;
 
+namespace Context;
+
 public record Hello(string Msg);
 
 public record Response(string Msg);

@@ -1,4 +1,5 @@
 ﻿using Proto;
+using Behaviors;
 
 var system = new ActorSystem();
 

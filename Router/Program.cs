@@ -1,5 +1,6 @@
 ﻿using Proto;
 using Proto.Router;
+using TestRouter;
 
 var system = new ActorSystem();
 

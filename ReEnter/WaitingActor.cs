@@ -1,5 +1,6 @@
 ﻿using Proto;
 
+namespace ReEnter;
 public class WaitingActor : IActor
 {
     public Task ReceiveAsync(IContext context)

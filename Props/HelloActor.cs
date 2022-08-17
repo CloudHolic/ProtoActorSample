@@ -1,5 +1,7 @@
 ﻿using Proto;
 
+namespace TestProps;
+
 public record Hello(string Msg);
 
 public class HelloActor : IActor

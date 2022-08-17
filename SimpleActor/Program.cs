@@ -1,4 +1,5 @@
 ﻿using Proto;
+using SimpleActor;
 
 var system = new ActorSystem();
 
