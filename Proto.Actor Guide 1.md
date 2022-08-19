@@ -528,3 +528,258 @@
       system.EventStream.Subscribe<DeadLetterEvent>(msg =>
           Console.WriteLIne($"Sender: {msg.Sender}, Pid: {msg.Pid}, Message: {msg.Message}"));
       ```
+
+
+
+### 11. Persistence
+
+- Actor의 상태를 영속적으로 유지시킬 수 있는 방법
+
+1. **Basic idea**
+
+   - Guide 2의 Grains 파트를 먼저 읽고 오는 것을 권장
+
+   - ```protobuf
+     message TemperatureMeasured
+     {
+     	double measure = 1;
+     	google.protobuf.Timestamp measured_at = 2;
+     }
+     
+     service Room
+     {
+     	rpc ProcessTemperatureChange(TemperatureMeasured) returns 
+     }
+     ```
+
+     - 방의 온도는 변할지언정 소멸되어서는 안 되는 값이므로 보존시켜야 함
+
+   - ```csharp
+     public record TemperatureState(double Measure, DateTimeOffset ChangedAt)
+     {
+         public static readonly Temperature Empty = new(default, DateTimeOffset.MinValue);
+     }
+     
+     public record RoomState(string Id, TemperatureState Temperature)
+     {
+         public RoomState(string id) : this(id, TemperatureState.Empty)
+         {
+             
+         }
+     }
+     
+     public delegate Task<RoomState?> TryGetRoomState(string roomId);
+     
+     public delegate Task PersisstRoomState(RoomState roomState);
+     ```
+
+     - 방의 온도를 외부에 저장하고 복원시키는 2개의 delegate를 만듦
+
+   - ```csharp
+     public class Room : Roombase
+     {
+         private readonly string _roomId;
+         private RoomState _roomState = null;
+         
+         private readonly TryGetRoomState _tryGetRoomState;
+         private readonly PersistRoomState _persistRoomState;
+         
+         public Room(IContext context, TryGetRoomState tryGetRoomState, 
+                     PersistRoomState persistRoomState) : base(context)
+         {
+             _tryGetRoomState = tryGetRoomState;
+             _persistRoomState = persistRoomState;
+             _roomId = context.GetActorId();
+         }
+         
+         public override async Task OnStarted()
+         {
+             _roomState = await _tryGetRoomState(_roomId) ?? new RoomState(_roomId);
+         }
+         
+         public override async Task ProcessTemperatureChange(TemperatureMeasured request)
+         {
+             if (TemperatureHasChanged())
+             {
+                 _roomState = _roomState with
+                 {
+                     Temperature = new TemperatureState(request.Measure,
+                     								request.MeasuredAt.ToDateTimeOffset());
+                 };
+                 
+                 await _persistRoomState(_roomState);
+             }
+             
+             bool TemperatureHasChanged() => MeasureIsNewer() && MeasrueIsDifferent();
+             
+             bool MeasureIsNewer() => 
+                 request.MeasuredAt.ToDateTimeOffset() > _roomState.Temperature.ChangedAt;
+             
+             bool MeasureIsDifferent() => 
+                 Math.Abs(request.Measure - _roomState.Temperature.Measure) > TOLERANCE;
+         }
+     }
+     ```
+
+     - Actor를 구현할 때 2개의 delegate를 주입받음
+     - ```OnStarted``` 메시지를 override하여 현재 상태값을 복원시킴
+     - 메시지를 처리할 때 실제로 변했을 경우 보존시킴
+
+   
+
+2. **Proto.Persistence**
+
+   - Actor의 상태 유지를 위한 모듈을 제공
+
+   - 크게 3가지 방법이 존재
+
+   - **Event Sourcing**
+
+     - ```Event Store```에서 모든 이벤트를 저장한 후 복원시킴
+
+     - ```csharp
+       public class CounterActor : IActor
+       {
+           private int _value = 0;
+           private readonly Persistence _persistesnce;
+           
+           public CounterActor(IEventStore eventStore, string actorId)
+           {
+               _persistence = Persistence.WithEventSourcing(eventStore, actorId, ApplyEvent);
+           }
+           
+           private void ApplyEvent(Event @event)
+           {
+               _value = @event.Data switch
+               {
+               	Add msg => _value + msg.Amount,
+                   _ => _value
+               };
+           }
+           
+           public async Task ReceiveAsync(IContext context)
+           {
+               switch (context.Message)
+               {
+                   case Started _:
+                       await _persistence.RecoverStateAsync();
+                       break;
+                   case Add msg:
+                       if (msg.Amount > 0)
+                           await _persistence.PersistEventAsync(new Add { Amount = msg.Amount })
+                           	.ContinueWith(_ => context.Respond(_value));
+               }
+           }
+       }
+       ```
+
+       - Actor의 생성자에 ```IEventStore```와 ```Actor Id```를 같이 넘겨줌
+       - ```Started``` 메시지를 받아 ```RecoverStateAsync```로 현재 상태를 복원시킴
+         - DB에는 모든 이벤트가 누적되어 쌓여있으므로, 이들을 처리하기 위해 ```ApplyEvent```를 이벤트 개수만큼 호출
+       - 값이 변경될 때마다 ```PersistEventAsync```를 호출해 해당 이벤트를 저장함
+         - ```PersistEventAsync```에서는 해당 이벤트를 처리하기 위해 ```ApplyEvent```를 1회 호출
+
+   - **Snapshotting**
+
+     - ```Snapshot Store```에서 현재 상태값만을 저장
+
+     - ```csharp
+       public class CounterActor : IActor
+       {
+           private int _value;
+           private readonly Persistence _persistence;
+           
+           public CounterActor(ISnapshotStore snapshotStore, string actorId)
+           {
+               _persistence = Persistence.WithSnapshotting(snapshotStore, actorId, ApplySnapshot);
+           }
+           
+           private void ApplySnapshot(Snapshot snapshot)
+           {
+               if (snapshot.State is int snap)
+                   _value = snap;
+           }
+           
+           public async Task ReceiveAsync(IContext context)
+           {
+               switch (context.Message)
+               {
+                   case Started _:
+                       await _persistence.RecoverStateAsync();
+                       break;
+                   case Add msg:
+                       if (msg.Amount > 0)
+                       {
+                           _value += msg.Amount;
+                           await _persistence.PersistSnapshotAsync(_value)
+                               .ContinueWith(_ => context.Respond(_value));
+                       }
+                       break;
+               }
+           }
+       }
+       ```
+
+       - Event sourcing과 비슷한 로직
+       - Actor의 생성자에 ```ISnapshotStore```와 ```Actor Id```를 같이 넘겨줌
+       - ```Started``` 메시지를 받아 ```RecoverStateAsync```로 현재 상태값을 가져옴
+         - DB에 이미 현재 상태값이 저장되어 있으므로, 이를 처리하기 위해 ```ApplySnapshot```을 1회만 호출
+       - 값이 변경될 때마다 ```PersistSnapshotAsync```를 호출해 처리 이후의 상태값을 저장함
+         - 단순히 DB에 값을 넣기만 하므로, ```ApplySnapshot```은 호출하지 않음
+
+   - **Event Sourcing & Snapshotting**
+
+     - 위에 제시된 2가지 방법을 동시에 사용
+
+     - ```csharp
+       public class CountActor : IActor
+       {
+           private int _value;
+           private readonly Persistence _persistsence;
+           
+           public CounterActor(IProvider provider, string actorId)
+           {
+               _persistence = Persistence.WithEventSourcingAndSnapshotting(
+               	provider, provider, actorId, ApplyEvent, ApplySnapshot,
+               	new IntervalStrategy(5), () => _value);
+           }
+           
+           private void ApplyEvent(Event @event)
+           {
+               _value = @event.Data switch
+               {
+       			Add msg => _value + msg.Amount,
+                    _ => _value
+               };
+           }
+           
+           private void ApplySnapshot(Snapshot snapshot)
+           {
+               if (snapshot.State is int snap)
+                   _value = snap;
+           }
+           
+           public async Task ReceiveAsync(IContext context)
+           {
+               switch (context.Message)
+               {
+                   case Started _:
+                       await _persistence.RecoverStateAsync();
+                       break;
+                   case Add msg:
+                       if (msg.Amount > 0)
+                           await _persistence.PersistEventAsync(new Add { Amount = msg.Amount })
+                           	.ContinueWith(_ => context.Respond(_value));
+                       break;
+               }
+           }
+       }
+       ```
+
+       - Actor의 생성자에 ```IEventStore```와 ```ISnapshotStore```를 따로 넘길 수 있지만, 동일한 저장소를 사용한다면 ```IProvider```로 한번만 넘겨도 됨
+         - 내부적으로 ```IProvider```는 ```IEventStore```와 ```ISnapshotStore```를 상속받는 interface로 구현됨
+       - ```ApplyEvent```와 ```ApplySnapshot```이 모두 필요
+       - Snapshot strategy를 선택할 수 있음
+         - ```EventTypeStrategy``` - 특정 이벤트 타입을 받을 경우 Event Sourcing 처리
+         - ```IntervalStrategy``` - 이벤트를 특정 횟수 받을 경우 Snapshot 처리
+         - ```TimeStrategy``` - 특정 시간에 Snapshot 처리
