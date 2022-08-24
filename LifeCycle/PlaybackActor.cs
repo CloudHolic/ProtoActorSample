@@ -8,7 +8,7 @@ public record Recoverable();
 
 public class PlaybackActor : IActor
 {
-    public PlaybackActor() => Console.WriteLine("Creating a PlalybackActor");
+    public PlaybackActor() => Console.WriteLine("Creating a PlaybackActor");
 
     public Task ReceiveAsync(IContext context)
     {
